@@ -6,18 +6,19 @@ import json
 import math
 import re
 import uuid
+import warnings
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 
-from haystack import default_from_dict, default_to_dict, logging
+from haystack import DeserializationError, default_from_dict, default_to_dict, logging
 from haystack.dataclasses import Document
 from haystack.document_stores.errors import DocumentStoreError, DuplicateDocumentError
 from haystack.document_stores.types import DuplicatePolicy
-from haystack.utils import expit
+from haystack.utils import deserialize_callable, expit, serialize_callable
 from haystack.utils.filters import convert, document_matches_filter
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ class InMemoryDocumentStore:
     def __init__(
         self,
         bm25_tokenization_regex: str = r"(?u)\b\w\w+\b",
+        bm25_tokenize_with: Optional[Union[Callable[[str], List[str]]]] = None,
         bm25_algorithm: Literal["BM25Okapi", "BM25L", "BM25Plus"] = "BM25L",
         bm25_parameters: Optional[Dict] = None,
         embedding_similarity_function: Literal["dot_product", "cosine"] = "dot_product",
@@ -81,7 +83,20 @@ class InMemoryDocumentStore:
             Using the same index allows you to store documents across multiple InMemoryDocumentStore instances.
         """
         self.bm25_tokenization_regex = bm25_tokenization_regex
-        self.tokenizer = re.compile(bm25_tokenization_regex).findall
+        self.bm25_tokenize_with = bm25_tokenize_with
+
+        if bm25_tokenize_with:
+            if isinstance(bm25_tokenize_with, str):
+                self.tokenizer = re.compile(bm25_tokenize_with).findall
+            else:
+                self.tokenizer = bm25_tokenize_with
+        elif bm25_tokenization_regex:
+            warnings.warn(
+                "The `bm25_tokenization_regex` parameter is deprecated and will be removed in Haystack 2.3.0"
+                "To customize BM25 tokenization use `bm25_tokenize_with`",
+                DeprecationWarning,
+            )
+            self.tokenizer = re.compile(bm25_tokenization_regex).findall
 
         if index is None:
             index = str(uuid.uuid4())
@@ -320,14 +335,30 @@ class InMemoryDocumentStore:
         :returns:
             Dictionary with serialized data.
         """
-        return default_to_dict(
-            self,
-            bm25_tokenization_regex=self.bm25_tokenization_regex,
-            bm25_algorithm=self.bm25_algorithm,
-            bm25_parameters=self.bm25_parameters,
-            embedding_similarity_function=self.embedding_similarity_function,
-            index=self.index,
-        )
+        serialized_bm25_tokenize_with = None
+        if self.bm25_tokenize_with is not None:
+            if isinstance(self.bm25_tokenize_with, str):
+                serialized_bm25_tokenize_with = self.bm25_tokenize_with
+            else:
+                serialized_bm25_tokenize_with = serialize_callable(self.bm25_tokenize_with)
+
+            return default_to_dict(
+                self,
+                bm25_tokenize_with=serialized_bm25_tokenize_with,
+                bm25_algorithm=self.bm25_algorithm,
+                bm25_parameters=self.bm25_parameters,
+                embedding_similarity_function=self.embedding_similarity_function,
+                index=self.index,
+            )
+        else:
+            return default_to_dict(
+                self,
+                bm25_tokenization_regex=self.bm25_tokenization_regex,
+                bm25_algorithm=self.bm25_algorithm,
+                bm25_parameters=self.bm25_parameters,
+                embedding_similarity_function=self.embedding_similarity_function,
+                index=self.index,
+            )
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "InMemoryDocumentStore":
@@ -339,6 +370,13 @@ class InMemoryDocumentStore:
         :returns:
             The deserialized component.
         """
+        init_params = data["init_parameters"]
+
+        if "bm25_tokenize_with" in init_params:
+            init_params["bm25_tokenize_with"] = (
+                deserialize_callable(init_params["bm25_tokenize_with"]) or init_params["bm25_tokenize_with"]
+            )
+
         return default_from_dict(cls, data)
 
     def save_to_disk(self, path: str) -> None:

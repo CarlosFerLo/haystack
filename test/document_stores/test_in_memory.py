@@ -62,6 +62,25 @@ class TestMemoryDocumentStore(DocumentStoreBaseTests):  # pylint: disable=R0904
             },
         }
 
+        store = InMemoryDocumentStore(
+            bm25_tokenize_with="custom_regex",
+            bm25_algorithm="BM25Plus",
+            bm25_parameters={"key": "value"},
+            embedding_similarity_function="cosine",
+            index="my_cool_index",
+        )
+        data = store.to_dict()
+        assert data == {
+            "type": "haystack.document_stores.in_memory.document_store.InMemoryDocumentStore",
+            "init_parameters": {
+                "bm25_tokenize_with": "custom_regex",
+                "bm25_algorithm": "BM25Plus",
+                "bm25_parameters": {"key": "value"},
+                "embedding_similarity_function": "cosine",
+                "index": "my_cool_index",
+            },
+        }
+
     @patch("haystack.document_stores.in_memory.document_store.re")
     def test_from_dict(self, mock_regex):
         data = {
